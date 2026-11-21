@@ -1,40 +1,34 @@
 package org.fossify.keyboard.helpers
 
-import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import org.fossify.commons.extensions.getAlertDialogBuilder
-import org.fossify.commons.helpers.ensureBackgroundThread
-import org.fossify.keyboard.R
+import android.os.Build
+import android.util.Log
 import org.fossify.keyboard.extensions.safeStorageContext
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 
 /**
  * Client for the external Dictionnary app (org.fossify.dictionnary).
  *
  * The keyboard app itself has no internet permission: the Dictionnary app downloads the
- * dictionary files and serves them through a content provider. Here we can:
- * - ask that provider for the content URI of a file, open the URI and keep a local copy
- *   of the downloaded file in our own files dir (see [copyDictionaryToLocal]),
- * - or explicitly launch the Dictionnary app with [DICTIONNARY_ACTION_DOWNLOAD] so it
- *   downloads a language and hands the result (and a read grant on the file URI) back
- *   to us via startActivityForResult (see [launchDictionaryDownload] / [handleDownloadResult]).
+ * dictionary files and serves them through a content provider. Here we can check whether a
+ * dictionary is already available (locally or in the Dictionnary app), ask that provider to
+ * (re)download a language, and keep a local copy of the downloaded file in our own files
+ * dir (see [copyDictionaryToLocal] / [copyFromUri]).
+ *
+ * Launching the Dictionnary app UI (download flow, install proposal) lives in
+ * [DictionnaryInstaller].
  */
 object DictionnaryClient {
-    /** request code used when picking the Dictionnary APK file with the system picker */
-    const val REQUEST_PICK_DICTIONNARY_APK = 1002
-
+    private const val TAG = "DictionnaryClient"
     private const val PATH_DICTIONARIES = "dictionaries"
     private const val PATH_FILES = "files"
     private const val METHOD_DOWNLOAD = "download"
     private const val COLUMN_DOWNLOADED = "downloaded"
     private const val POLL_INTERVAL_MS = 500L
     private const val MAX_POLLS = 60
-
-    fun dictionaryUri(lang: String): Uri =
-        Uri.parse("content://$DICTIONNARY_AUTHORITY/$PATH_DICTIONARIES/$lang")
 
     fun dictionaryFileUri(lang: String): Uri =
         Uri.parse("content://$DICTIONNARY_AUTHORITY/$PATH_FILES/$PATH_DICTIONARIES/$lang.json")
@@ -64,15 +58,22 @@ object DictionnaryClient {
 
     /** asks the Dictionnary app's provider to (re)download the given language */
     fun requestDownload(context: Context, lang: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            // ContentResolver.call() only exists from API 29; on older devices the download
+            // is triggered through the Dictionnary app's activity flow instead
+            return
+        }
         try {
             context.contentResolver.call(DICTIONNARY_AUTHORITY, METHOD_DOWNLOAD, lang, null)
-        } catch (_: Exception) {
+        } catch (e: SecurityException) {
+            Log.w(TAG, "could not ask $DICTIONNARY_AUTHORITY to download $lang", e)
         }
     }
 
     /** whether the Dictionnary app already has the file, as reported by its provider */
     fun isDownloadedRemotely(context: Context, lang: String): Boolean = try {
-        context.contentResolver.query(dictionaryUri(lang), null, null, null, null)?.use { cursor ->
+        val uri = Uri.parse("content://$DICTIONNARY_AUTHORITY/$PATH_DICTIONARIES/$lang")
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             cursor.moveToFirst() && cursor.getInt(cursor.getColumnIndexOrThrow(COLUMN_DOWNLOADED)) == 1
         } ?: false
     } catch (_: Exception) {
@@ -111,143 +112,35 @@ object DictionnaryClient {
         return copyFromUri(context, dictionaryFileUri(lang), lang)
     }
 
-    /** asynchronous variant of [copyDictionaryToLocal] */
-    fun ensureLocalDictionary(context: Context, lang: String, onReady: (File?) -> Unit) {
-        ensureBackgroundThread {
-            onReady(copyDictionaryToLocal(context, lang))
-        }
-    }
-
     /** copies the file exposed at the given content URI into our local dictionaries dir */
     fun copyFromUri(context: Context, uri: Uri, lang: String): File? {
         val localFile = localDictionaryFile(context, lang)
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                localFile.parentFile?.mkdirs()
-                val tmpFile = File(localFile.parentFile, localFile.name + ".tmp")
-                tmpFile.outputStream().use { output -> input.copyTo(output) }
-                if (tmpFile.isFile && tmpFile.length() > 0) {
-                    if (localFile.exists()) {
-                        localFile.delete()
-                    }
-                    tmpFile.renameTo(localFile)
-                    localFile
-                } else {
-                    tmpFile.delete()
-                    null
-                }
+                copyStreamToFile(input, localFile)
             }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            Log.e(TAG, "could not read dictionary from $uri", e)
+            null
+        } catch (e: SecurityException) {
+            Log.e(TAG, "no read permission on $uri", e)
             null
         }
     }
 
-    /** intent launching the Dictionnary app to download [lang] and report back via activity result */
-    fun downloadIntent(context: Context, lang: String): Intent =
-        Intent(DICTIONNARY_ACTION_DOWNLOAD).apply {
-            addCategory(Intent.CATEGORY_DEFAULT)
-            putExtra(DICTIONNARY_EXTRA_LANG, lang)
-            putExtra(DICTIONNARY_EXTRA_CALLING_PACKAGE, context.packageName)
-        }
-
-    /**
-     * Launches the Dictionnary app so it downloads the dictionary for [lang]. The result comes
-     * back in onActivityResult: RESULT_OK with [DICTIONNARY_EXTRA_RESULT_URI] pointing to the
-     * downloaded file (the Dictionnary app grants us read access to that URI).
-     */
-    fun launchDictionaryDownload(activity: Activity, lang: String, requestCode: Int) {
-        try {
-            activity.startActivityForResult(downloadIntent(activity, lang), requestCode)
-        } catch (_: Exception) {
-            proposeInstallDictionnary(activity, lang)
-        }
-    }
-
-    /** same as [proposeInstallDictionnary] but without the lang-specific message context */
-    private fun proposeInstallDictionnary(activity: Activity, lang: String) =
-        proposeInstallDictionnary(activity, lang, REQUEST_PICK_DICTIONNARY_APK)
-
-    /**
-     * Handles the activity result of [launchDictionaryDownload]: copies the file the Dictionnary
-     * app exposed (and granted us) into our local storage. Returns the local file or null.
-     */
-    fun handleDownloadResult(context: Context, resultCode: Int, data: Intent?): File? {
-        if (resultCode != Activity.RESULT_OK || data == null) {
-            return null
-        }
-        val lang = data.getStringExtra(DICTIONNARY_EXTRA_LANG) ?: return null
-        val uriString = data.getStringExtra(DICTIONNARY_EXTRA_RESULT_URI)
-        val uri = uriString?.let { Uri.parse(it) } ?: dictionaryFileUri(lang)
-        return copyFromUri(context, uri, lang)
-    }
-
-    /** opens the launcher activity of the installed Dictionnary app, if any */
-    fun openDictionnaryApp(activity: Activity): Boolean {
-        val packageName = dictionnaryPackageName(activity) ?: return false
-        val launchIntent = activity.packageManager.getLaunchIntentForPackage(packageName) ?: return false
-        return try {
-            activity.startActivity(launchIntent)
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    /** lets the user pick the Dictionnary APK file with the system file picker */
-    fun pickDictionnaryApk(activity: Activity, requestCode: Int) {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/vnd.android.package-archive"
-        }
-        try {
-            activity.startActivityForResult(intent, requestCode)
-        } catch (_: Exception) {
-        }
-    }
-
-    /** hands the picked APK content URI to the system package installer */
-    fun installApkFromUri(activity: Activity, uri: Uri) {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            activity.startActivity(intent)
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * Shows a dialog proposing to install the Dictionnary app (it is not installed yet):
-     * either by picking its APK file (system file picker → package installer, works without
-     * any store), or by opening its Play Store page.
-     */
-    fun proposeInstallDictionnary(activity: Activity, lang: String, pickRequestCode: Int) {
-        activity.getAlertDialogBuilder()
-            .setTitle(R.string.install_dictionnary_title)
-            .setMessage(activity.getString(R.string.install_dictionnary_message, lang))
-            .setPositiveButton(R.string.install_dictionnary_pick_apk) { _, _ ->
-                pickDictionnaryApk(activity, pickRequestCode)
+    private fun copyStreamToFile(input: InputStream, localFile: File): File? {
+        localFile.parentFile?.mkdirs()
+        val tmpFile = File(localFile.parentFile, localFile.name + ".tmp")
+        tmpFile.outputStream().use { output -> input.copyTo(output) }
+        return if (tmpFile.isFile && tmpFile.length() > 0) {
+            if (localFile.exists()) {
+                localFile.delete()
             }
-            .setNeutralButton(R.string.open_play_store) { _, _ ->
-                openDictionnaryStorePage(activity)
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun openDictionnaryStorePage(activity: Activity) {
-        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$DICTIONNARY_PACKAGE"))
-        try {
-            activity.startActivity(marketIntent)
-        } catch (_: ActivityNotFoundException) {
-            activity.startActivity(
-                Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://play.google.com/store/apps/details?id=$DICTIONNARY_PACKAGE")
-                )
-            )
+            tmpFile.renameTo(localFile)
+            localFile
+        } else {
+            tmpFile.delete()
+            null
         }
     }
 }

@@ -27,6 +27,7 @@ import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_160_PERCENT
 import org.fossify.keyboard.helpers.DEFAULT_DICTIONARY_LANG
 import org.fossify.keyboard.helpers.DICTIONNARY_EXTRA_LANG
 import org.fossify.keyboard.helpers.DictionnaryClient
+import org.fossify.keyboard.helpers.DictionnaryInstaller
 import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_70_PERCENT
 import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_80_PERCENT
 import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_90_PERCENT
@@ -42,7 +43,7 @@ class SettingsActivity : SimpleActivity() {
 
     companion object {
         private const val REQUEST_DOWNLOAD_DICTIONARY = 1001
-        private val REQUEST_PICK_DICTIONNARY_APK = DictionnaryClient.REQUEST_PICK_DICTIONNARY_APK
+        private val REQUEST_PICK_DICTIONNARY_APK = DictionnaryInstaller.REQUEST_PICK_DICTIONNARY_APK
     }
 
     private var installProposalShown = false
@@ -237,9 +238,9 @@ class SettingsActivity : SimpleActivity() {
             return
         }
         if (DictionnaryClient.isDictionnaryInstalled(this)) {
-            DictionnaryClient.launchDictionaryDownload(this, lang, REQUEST_DOWNLOAD_DICTIONARY)
+            DictionnaryInstaller.launchDictionaryDownload(this, lang, REQUEST_DOWNLOAD_DICTIONARY)
         } else {
-            DictionnaryClient.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
+            DictionnaryInstaller.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
         }
     }
 
@@ -255,16 +256,20 @@ class SettingsActivity : SimpleActivity() {
                 when {
                     !installed -> {
                         if (lang != null) {
-                            DictionnaryClient.proposeInstallDictionnary(this@SettingsActivity, lang, REQUEST_PICK_DICTIONNARY_APK)
+                            DictionnaryInstaller.proposeInstallDictionnary(
+                                this@SettingsActivity, lang, REQUEST_PICK_DICTIONNARY_APK
+                            )
                         } else {
-                            DictionnaryClient.proposeInstallDictionnary(this@SettingsActivity, DEFAULT_DICTIONARY_LANG, REQUEST_PICK_DICTIONNARY_APK)
+                            DictionnaryInstaller.proposeInstallDictionnary(
+                                this@SettingsActivity, DEFAULT_DICTIONARY_LANG, REQUEST_PICK_DICTIONNARY_APK
+                            )
                         }
                     }
 
                     lang != null && !DictionnaryClient.isLocalDictionaryAvailable(this@SettingsActivity, lang) ->
                         ensureDictionary(lang)
 
-                    else -> DictionnaryClient.openDictionnaryApp(this@SettingsActivity)
+                    else -> DictionnaryInstaller.openDictionnaryApp(this@SettingsActivity)
                 }
             }
         }
@@ -289,14 +294,14 @@ class SettingsActivity : SimpleActivity() {
             return
         }
         installProposalShown = true
-        DictionnaryClient.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
+        DictionnaryInstaller.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, resultData: Intent?) {
         super.onActivityResult(requestCode, resultCode, resultData)
         if (requestCode == REQUEST_DOWNLOAD_DICTIONARY) {
             val lang = resultData?.getStringExtra(DICTIONNARY_EXTRA_LANG)
-            val file = DictionnaryClient.handleDownloadResult(this, resultCode, resultData)
+            val file = DictionnaryInstaller.handleDownloadResult(this, resultCode, resultData)
             if (file != null) {
                 toast(getString(R.string.dictionary_downloaded_ok, lang.orEmpty()))
             } else if (lang != null) {
@@ -307,7 +312,7 @@ class SettingsActivity : SimpleActivity() {
         } else if (requestCode == REQUEST_PICK_DICTIONNARY_APK && resultCode == RESULT_OK) {
             resultData?.data?.let {
                 // hand the picked APK to the system package installer
-                DictionnaryClient.installApkFromUri(this, it)
+                DictionnaryInstaller.installApkFromUri(this, it)
             }
         }
     }

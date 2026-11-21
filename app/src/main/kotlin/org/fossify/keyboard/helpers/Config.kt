@@ -82,39 +82,46 @@ class Config(context: Context) : BaseConfig(context) {
 
     /** maps the system locale to the closest supported keyboard language (English QWERTY as fallback) */
     private fun languageForLocale(locale: Locale): Int {
-        val country = locale.country.uppercase(Locale.getDefault())
-        return when (locale.language.lowercase(Locale.getDefault())) {
-            "fr" -> LANGUAGE_FRENCH_AZERTY
-            "de" -> if (country == "DE") LANGUAGE_GERMAN else LANGUAGE_GERMAN_QWERTZ
-            "es" -> LANGUAGE_SPANISH
-            "it" -> LANGUAGE_ITALIAN
-            "pt" -> LANGUAGE_PORTUGUESE
-            "nl" -> LANGUAGE_DUTCH
-            "pl" -> LANGUAGE_POLISH
-            "sv" -> LANGUAGE_SWEDISH
-            "da" -> LANGUAGE_DANISH
-            "nb", "no" -> LANGUAGE_NORWEGIAN
-            "ru" -> LANGUAGE_RUSSIAN
-            "uk" -> LANGUAGE_UKRAINIAN
-            "cs" -> LANGUAGE_CZECH_QWERTY
-            "tr" -> LANGUAGE_TURKISH
-            "el" -> LANGUAGE_GREEK
-            "he" -> LANGUAGE_HEBREW
-            "ar" -> LANGUAGE_ARABIC
-            "bn" -> LANGUAGE_BENGALI
-            "lv" -> LANGUAGE_LATVIAN
-            "lt" -> LANGUAGE_LITHUANIAN
-            "ro" -> LANGUAGE_ROMANIAN
-            "sl" -> LANGUAGE_SLOVENIAN
-            "bg" -> LANGUAGE_BULGARIAN
-            "eo" -> LANGUAGE_ESPERANTO
-            else -> LANGUAGE_ENGLISH_QWERTY
+        val language = locale.language.lowercase(Locale.getDefault())
+        if (language == "de") {
+            val country = locale.country.uppercase(Locale.getDefault())
+            return if (country == "DE") LANGUAGE_GERMAN else LANGUAGE_GERMAN_QWERTZ
         }
+        return localeLanguageToKeyboardLanguage[language] ?: LANGUAGE_ENGLISH_QWERTY
     }
+
+    private val localeLanguageToKeyboardLanguage = mapOf(
+        "fr" to LANGUAGE_FRENCH_AZERTY,
+        "es" to LANGUAGE_SPANISH,
+        "it" to LANGUAGE_ITALIAN,
+        "pt" to LANGUAGE_PORTUGUESE,
+        "nl" to LANGUAGE_DUTCH,
+        "pl" to LANGUAGE_POLISH,
+        "sv" to LANGUAGE_SWEDISH,
+        "da" to LANGUAGE_DANISH,
+        "nb" to LANGUAGE_NORWEGIAN,
+        "no" to LANGUAGE_NORWEGIAN,
+        "ru" to LANGUAGE_RUSSIAN,
+        "uk" to LANGUAGE_UKRAINIAN,
+        "cs" to LANGUAGE_CZECH_QWERTY,
+        "tr" to LANGUAGE_TURKISH,
+        "el" to LANGUAGE_GREEK,
+        "he" to LANGUAGE_HEBREW,
+        "ar" to LANGUAGE_ARABIC,
+        "bn" to LANGUAGE_BENGALI,
+        "lv" to LANGUAGE_LATVIAN,
+        "lt" to LANGUAGE_LITHUANIAN,
+        "ro" to LANGUAGE_ROMANIAN,
+        "sl" to LANGUAGE_SLOVENIAN,
+        "bg" to LANGUAGE_BULGARIAN,
+        "eo" to LANGUAGE_ESPERANTO
+    )
 
     var wasDictionaryLanguageProposed: Boolean
         get() = prefs.getBoolean(DICTIONARY_LANGUAGE_PROPOSED, false)
-        set(wasDictionaryLanguageProposed) = prefs.edit().putBoolean(DICTIONARY_LANGUAGE_PROPOSED, wasDictionaryLanguageProposed).apply()
+        set(wasDictionaryLanguageProposed) = prefs.edit()
+            .putBoolean(DICTIONARY_LANGUAGE_PROPOSED, wasDictionaryLanguageProposed)
+            .apply()
 
     var showSuggestions: Boolean
         get() = prefs.getBoolean(SHOW_SUGGESTIONS, false)

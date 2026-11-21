@@ -24,6 +24,7 @@ import org.fossify.keyboard.extensions.config
 import org.fossify.keyboard.extensions.inputMethodManager
 import org.fossify.keyboard.helpers.DICTIONNARY_EXTRA_LANG
 import org.fossify.keyboard.helpers.DictionnaryClient
+import org.fossify.keyboard.helpers.DictionnaryInstaller
 import org.fossify.keyboard.helpers.dictionaryLangForKeyboardLanguage
 
 class MainActivity : SimpleActivity() {
@@ -31,7 +32,7 @@ class MainActivity : SimpleActivity() {
 
     companion object {
         private const val REQUEST_DOWNLOAD_DICTIONARY = 1001
-        private val REQUEST_PICK_DICTIONNARY_APK = DictionnaryClient.REQUEST_PICK_DICTIONNARY_APK
+        private val REQUEST_PICK_DICTIONNARY_APK = DictionnaryInstaller.REQUEST_PICK_DICTIONNARY_APK
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,9 +98,9 @@ class MainActivity : SimpleActivity() {
         }
         config.wasDictionaryLanguageProposed = true
         if (DictionnaryClient.isDictionnaryInstalled(this)) {
-            DictionnaryClient.launchDictionaryDownload(this, lang, REQUEST_DOWNLOAD_DICTIONARY)
+            DictionnaryInstaller.launchDictionaryDownload(this, lang, REQUEST_DOWNLOAD_DICTIONARY)
         } else {
-            DictionnaryClient.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
+            DictionnaryInstaller.proposeInstallDictionnary(this, lang, REQUEST_PICK_DICTIONNARY_APK)
         }
     }
 
@@ -108,7 +109,7 @@ class MainActivity : SimpleActivity() {
         when (requestCode) {
             REQUEST_DOWNLOAD_DICTIONARY -> {
                 val lang = resultData?.getStringExtra(DICTIONNARY_EXTRA_LANG)
-                val file = DictionnaryClient.handleDownloadResult(this, resultCode, resultData)
+                val file = DictionnaryInstaller.handleDownloadResult(this, resultCode, resultData)
                 if (file != null) {
                     toast(getString(R.string.dictionary_downloaded_ok, lang.orEmpty()))
                 } else if (lang != null) {
@@ -118,7 +119,7 @@ class MainActivity : SimpleActivity() {
 
             REQUEST_PICK_DICTIONNARY_APK -> {
                 if (resultCode == RESULT_OK) {
-                    resultData?.data?.let { DictionnaryClient.installApkFromUri(this, it) }
+                    resultData?.data?.let { DictionnaryInstaller.installApkFromUri(this, it) }
                 }
             }
         }

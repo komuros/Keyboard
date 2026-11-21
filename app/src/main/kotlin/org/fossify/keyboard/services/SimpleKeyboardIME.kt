@@ -692,8 +692,10 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
 
         val rippleBg = resources.getDrawable(R.drawable.clipboard_background, theme) as RippleDrawable
         val layerDrawable = rippleBg.findDrawableByLayerId(R.id.clipboard_background_holder) as LayerDrawable
-        layerDrawable.findDrawableByLayerId(R.id.clipboard_background_stroke).applyColorFilter(safeStorageContext.getStrokeColor())
-        layerDrawable.findDrawableByLayerId(R.id.clipboard_background_shape).applyColorFilter(safeStorageContext.getProperBackgroundColor())
+        layerDrawable.findDrawableByLayerId(R.id.clipboard_background_stroke)
+            .applyColorFilter(safeStorageContext.getStrokeColor())
+        layerDrawable.findDrawableByLayerId(R.id.clipboard_background_shape)
+            .applyColorFilter(safeStorageContext.getProperBackgroundColor())
 
         val maxWidth = resources.getDimensionPixelSize(R.dimen.suggestion_max_width)
         val height = resources.getDimensionPixelSize(R.dimen.label_text_size) + verticalPadding * 2
