@@ -1,29 +1,23 @@
 package org.fossify.dictionnary.helpers
 
 import android.content.Context
-import org.json.JSONArray
-import java.io.BufferedReader
 import java.io.File
-import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import kotlin.math.log10
-import kotlin.math.roundToLong
 
 /**
  * Downloads the dictionary files. This is the only place in the pair of apps where the
  * network is used: the Dictionnary app holds the INTERNET permission, the keyboard app
  * never touches the network and only reads the files through the content provider.
  *
- * The raw "word count" lists (see [DICTIONARY_BASE_URL]) are converted on the fly to the
- * JSON format the keyboard loads: [ [word, log10(frequency)], ... ], most frequent first.
+ * The sources are the small pre-built JSON files committed in this repository (see
+ * [DICTIONARY_BASE_URL], generated offline from the fastText Common Crawl word vectors by
+ * dictionnary/tools/generate_dictionaries.py): [ [word, log10(frequency)], ... ], most
+ * frequent first. They are a few hundred KB each, downloaded as-is, no conversion on device.
  */
 object DictionaryDownloader {
-    // number of words kept per dictionary, same order of magnitude as the bundled en_US.json
-    private const val MAX_DICTIONARY_WORDS = 25000
-
     private val executor = Executors.newCachedThreadPool()
     private val running = ConcurrentHashMap<String, Boolean>()
     private val listeners = ConcurrentHashMap<String, MutableList<(Boolean) -> Unit>>()
@@ -69,30 +63,38 @@ object DictionaryDownloader {
     }
 
     private fun downloadBlocking(context: Context, lang: String): Boolean {
-        val sourceUrl = dictionarySourceUrl(lang) ?: return false
         val file = dictionaryFile(context, lang)
         file.parentFile?.mkdirs()
         val tmpFile = File(file.parentFile, file.name + ".tmp")
+
+        // offline path first: dictionaries bundled in the app assets
+        // (dictionnary/dictionaries, symlinked into src/main/assets/dictionaries)
+        val fromAssets = try {
+            context.assets.open("$PATH_ASSETS_DICTIONARIES/$lang.json").use { input ->
+                tmpFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            tmpFile.isFile && tmpFile.length() > 0
+        } catch (_: Exception) {
+            false
+        }
+        if (fromAssets) {
+            return finalize(tmpFile, file)
+        }
+        tmpFile.delete()
+
+        val sourceUrl = dictionarySourceUrl(lang) ?: return false
         val connection = URL(sourceUrl).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
         connection.connectTimeout = 15000
-        connection.readTimeout = 60000
+        connection.readTimeout = 30000
         connection.instanceFollowRedirects = true
         var success = false
         try {
-            val entries = connection.inputStream.bufferedReader().use { reader ->
-                readFrequencyEntries(reader)
+            // the source is already the final JSON: plain stream copy, write to .tmp then rename
+            connection.inputStream.use { input ->
+                tmpFile.outputStream().use { output -> input.copyTo(output) }
             }
-            if (entries.isNotEmpty()) {
-                tmpFile.outputStream().use { output -> writeDictionaryJson(entries, output) }
-                success = tmpFile.isFile && tmpFile.length() > 0
-            }
-            if (success) {
-                if (file.exists()) {
-                    file.delete()
-                }
-                success = tmpFile.renameTo(file)
-            }
+            success = finalize(tmpFile, file)
         } catch (_: Exception) {
             success = false
         } finally {
@@ -104,32 +106,13 @@ object DictionaryDownloader {
         return success
     }
 
-    /** reads "word count" lines from a raw frequency list, most frequent words first */
-    private fun readFrequencyEntries(reader: BufferedReader): List<Pair<String, Long>> {
-        val entries = ArrayList<Pair<String, Long>>(MAX_DICTIONARY_WORDS)
-        while (entries.size < MAX_DICTIONARY_WORDS) {
-            val line = reader.readLine() ?: break
-            val separator = line.lastIndexOf(' ')
-            if (separator <= 0) {
-                continue
-            }
-            val count = line.substring(separator + 1).toLongOrNull() ?: continue
-            if (count <= 0) {
-                continue
-            }
-            entries.add(line.substring(0, separator) to count)
+    private fun finalize(tmpFile: File, file: File): Boolean {
+        if (!tmpFile.isFile || tmpFile.length() == 0L) {
+            return false
         }
-        return entries
-    }
-
-    /** writes the entries as wordfreq-style JSON: [ [word, log10(frequency)], ... ] */
-    private fun writeDictionaryJson(entries: List<Pair<String, Long>>, output: OutputStream) {
-        val total = entries.sumOf { it.second }.toDouble()
-        val array = JSONArray()
-        for ((word, count) in entries) {
-            val logFrequency = (log10(count.toDouble() / total) * 10000).roundToLong() / 10000.0
-            array.put(JSONArray().put(word).put(logFrequency))
+        if (file.exists()) {
+            file.delete()
         }
-        output.bufferedWriter().use { it.write(array.toString()) }
+        return tmpFile.renameTo(file)
     }
 }

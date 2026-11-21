@@ -6,54 +6,34 @@ const val AUTHORITY = "org.fossify.dictionnary.provider"
 // signature level permission, shared with the keyboard app when both are signed with the same key
 const val ACCESS_PERMISSION = "org.fossify.dictionnary.ACCESS_DICTIONARIES"
 
-// base URL of the raw word frequency lists (OpenSubtitles 2018 by HermitDave/FrequencyWords,
-// one "<code>_50k.txt" file per language with "word count" per line). Only this app is
-// allowed to reach the network; the lists are converted on the fly to the JSON format the
-// keyboard expects ("<lang>.json", wordfreq style: [ [word, log10(frequency)], ... ]).
+// base URL of the pre-built dictionary files committed in this repository
+// (dictionnary/dictionaries/<lang>.json). They are generated offline from the fastText Common
+// Crawl word vectors (https://fasttext.cc/docs/en/crawl-vectors.html) by
+// dictionnary/tools/generate_dictionaries.py and are small (~0.5 MB each, wordfreq-style JSON:
+// [ [word, log10(frequency)], ... ], most frequent first). Only this app is allowed to reach
+// the network; the keyboard app never touches it and only reads the files through the content
+// provider.
 const val DICTIONARY_BASE_URL =
-    "https://raw.githubusercontent.com/HermitDave/FrequencyWords/master/content/2018"
-
-// maps our dictionary codes ("<lang>.json") to the language folder of the source lists
-val DICTIONARY_SOURCE_CODES = mapOf(
-    "en_US" to "en",
-    "fr_FR" to "fr",
-    "de_DE" to "de",
-    "es_ES" to "es",
-    "it_IT" to "it",
-    "pt_PT" to "pt",
-    "nl_NL" to "nl",
-    "pl_PL" to "pl",
-    "sv_SE" to "sv",
-    "da_DK" to "da",
-    "nb_NO" to "no",
-    "ru_RU" to "ru",
-    "uk_UA" to "uk",
-    "cs_CZ" to "cs",
-    "tr_TR" to "tr",
-    "el_GR" to "el",
-    "he_IL" to "he",
-    "ar_AR" to "ar",
-    "bn_BD" to "bn",
-    "lv_LV" to "lv",
-    "lt_LT" to "lt",
-    "ro_RO" to "ro",
-    "sl_SI" to "sl",
-    "bg_BG" to "bg",
-    "eo" to "eo"
-)
+    "https://raw.githubusercontent.com/komuros/Keyboard/auto-correct-with-dictionnary-app/dictionnary/dictionaries"
 
 // languages this app knows how to download and serve, the file name is "<lang>.json"
-val AVAILABLE_DICTIONARIES = DICTIONARY_SOURCE_CODES.keys.toList()
+val AVAILABLE_DICTIONARIES = listOf(
+    "en_US", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_PT", "nl_NL", "pl_PL", "sv_SE", "da_DK",
+    "nb_NO", "ru_RU", "uk_UA", "cs_CZ", "tr_TR", "el_GR", "he_IL", "ar_AR", "bn_BD", "lv_LV",
+    "lt_LT", "ro_RO", "sl_SI", "bg_BG", "eo"
+)
 
-// raw "word count" list served for a dictionary language, null when the language is unknown
-fun dictionarySourceUrl(lang: String): String? {
-    val code = DICTIONARY_SOURCE_CODES[lang] ?: return null
-    return "$DICTIONARY_BASE_URL/$code/${code}_50k.txt"
-}
+// pre-built "<lang>.json" file served from this repository, null when the language is unknown
+fun dictionarySourceUrl(lang: String): String? =
+    if (lang in AVAILABLE_DICTIONARIES) "$DICTIONARY_BASE_URL/$lang.json" else null
 
 // provider paths
 const val PATH_DICTIONARIES = "dictionaries"
 const val PATH_FILES = "files"
+
+// assets folder holding the pre-built dictionaries (dictionnary/dictionaries, symlinked into
+// src/main/assets) used as an offline source before hitting the network
+const val PATH_ASSETS_DICTIONARIES = "dictionaries"
 
 // provider "call" methods
 const val METHOD_DOWNLOAD = "download"

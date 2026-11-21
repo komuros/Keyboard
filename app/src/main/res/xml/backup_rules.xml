@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- the clipboard history may contain sensitive copied content (passwords, ...):
+         never include it in cloud backups -->
+    <exclude domain="database" path="." />
+</full-backup-content>
