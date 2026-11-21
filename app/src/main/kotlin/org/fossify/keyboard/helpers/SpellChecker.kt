@@ -4,18 +4,11 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import org.fossify.commons.helpers.ensureBackgroundThread
-import org.json.JSONArray
 import org.json.JSONException
 import java.io.IOException
 import java.util.Collections
-import kotlin.math.abs
-import kotlin.math.min
 
 private const val DEBOUNCE_DELAY_MS = 100L
-private const val MAX_SUGGESTIONS = 3
-private const val MAX_LENGTH_DIFF = 2
-private const val MAX_EDIT_DISTANCE = 2
-private const val MIN_WORD_LENGTH = 2
 private const val CACHE_SIZE = 20
 
 /**
@@ -23,12 +16,17 @@ private const val CACHE_SIZE = 20
  *
  * The dictionary file is not bundled with the keyboard and the keyboard app has no internet
  * permission: the file is provided by the external Dictionnary app through a content URI
- * (see [DictionnaryClient]), copied locally, and loaded from that local copy.
+ * (see [DictionnaryClient]), copied locally, and loaded from that local copy. The actual
+ * matching logic lives in [DictionaryIndex] (pure Kotlin, unit-tested); this class only
+ * handles loading, debouncing and the suggestion cache.
  */
 class SpellChecker(context: Context, private val dictionaryLang: String = DEFAULT_DICTIONARY_LANG) {
     private val appContext = context.applicationContext
+
+    // null until the dictionary is loaded: isValidWord() then answers true (no auto-correct)
     @Volatile
-    private var dictionary: HashMap<String, Int>? = null
+    private var index: DictionaryIndex? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingRunnable: Runnable? = null
     @Suppress("MagicNumber")
@@ -70,27 +68,11 @@ class SpellChecker(context: Context, private val dictionaryLang: String = DEFAUL
         }
     }
 
-    fun isValidWord(word: String): Boolean {
-        return dictionary?.containsKey(word.lowercase()) ?: true
-    }
+    fun isValidWord(word: String): Boolean = index?.isValidWord(word) ?: true
 
-    /**
-     * The most frequent words of the dictionary, used to predict the word following a space
-     * before the user types its first letter. The dictionary holds unigram frequencies only,
-     * so the most probable next word is simply the most frequent one (optionally excluding
-     * the word that was just typed).
-     */
-    fun nextWordSuggestions(exclude: String? = null): List<String> {
-        val dict = dictionary ?: return emptyList()
-        val excluded = exclude?.lowercase()
-        return dict.entries
-            .asSequence()
-            .filter { it.key != excluded }
-            .sortedByDescending { it.value }
-            .take(MAX_SUGGESTIONS)
-            .map { it.key }
-            .toList()
-    }
+    /** see [DictionaryIndex.nextWordSuggestions] */
+    fun nextWordSuggestions(exclude: String? = null): List<String> =
+        index?.nextWordSuggestions(exclude) ?: emptyList()
 
     fun destroy() {
         pendingRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -107,95 +89,35 @@ class SpellChecker(context: Context, private val dictionaryLang: String = DEFAUL
     }
 
     private fun loadDictionaryFromLocalCopy() {
-        dictionary = loadDictionary()
-        if (dictionary?.isEmpty() == true) {
+        loadDictionary()
+        if (index?.size == 0) {
             // no local copy yet: get the file from the Dictionnary app via its content
             // URI, keep a local copy of it, then load it
             DictionnaryClient.copyDictionaryToLocal(appContext, dictionaryLang)
-            dictionary = loadDictionary()
+            loadDictionary()
         }
     }
 
-    private fun loadDictionary(): HashMap<String, Int> {
-        val map = HashMap<String, Int>()
-        try {
+    private fun loadDictionary() {
+        index = try {
             val file = DictionnaryClient.localDictionaryFile(appContext, dictionaryLang)
-            if (!file.isFile) {
-                return map
-            }
-            val jsonString = file.bufferedReader().use { it.readText() }
-            val jsonArray = JSONArray(jsonString)
-
-            for (i in 0 until jsonArray.length()) {
-                val entry = jsonArray.getJSONArray(i)
-                val word = entry.getString(0)
-                val rank = jsonArray.length() - i
-                map[word] = rank
+            if (file.isFile) {
+                DictionaryIndex.fromJson(file.bufferedReader().use { it.readText() })
+            } else {
+                DictionaryIndex.EMPTY
             }
         } catch (_: IOException) {
+            DictionaryIndex.EMPTY
         } catch (_: JSONException) {
+            DictionaryIndex.EMPTY
         }
-        return map
     }
 
     private fun findSuggestions(input: String): List<String> {
-        val dict = dictionary ?: return emptyList()
-        if (input.length < MIN_WORD_LENGTH) return emptyList()
-
         val inputLower = input.lowercase()
-
         cache[inputLower]?.let { return it }
-
-        val prefixMatches = dict.keys
-            .filter { word -> word.startsWith(inputLower) && word != inputLower }
-            .sortedByDescending { dict[it] ?: 0 }
-            .take(MAX_SUGGESTIONS)
-
-        if (prefixMatches.isNotEmpty()) {
-            cache[inputLower] = prefixMatches
-            return prefixMatches
-        }
-
-        val firstChar = inputLower[0]
-        val inputLen = inputLower.length
-
-        val levenshteinMatches = dict.keys
-            .filter { word ->
-                word[0] == firstChar && abs(word.length - inputLen) <= MAX_LENGTH_DIFF
-            }
-            .map { word ->
-                word to levenshteinDistance(inputLower, word)
-            }
-            .filter { it.second <= MAX_EDIT_DISTANCE }
-            .sortedWith(compareBy({ it.second }, { -(dict[it.first] ?: 0) }))
-            .take(MAX_SUGGESTIONS)
-            .map { it.first }
-
-        cache[inputLower] = levenshteinMatches
-        return levenshteinMatches
-    }
-
-    private fun levenshteinDistance(a: String, b: String, maxDistance: Int = MAX_EDIT_DISTANCE): Int {
-        val m = a.length
-        val n = b.length
-        val dp = Array(m + 1) { IntArray(n + 1) }
-
-        for (i in 0..m) dp[i][0] = i
-        for (j in 0..n) dp[0][j] = j
-
-        for (i in 1..m) {
-            var rowMin = Int.MAX_VALUE
-            for (j in 1..n) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                dp[i][j] = min(
-                    min(dp[i - 1][j] + 1, dp[i][j - 1] + 1),
-                    dp[i - 1][j - 1] + cost
-                )
-                rowMin = min(rowMin, dp[i][j])
-            }
-            if (rowMin > maxDistance) return maxDistance + 1
-        }
-
-        return dp[m][n]
+        val result = index?.findSuggestions(input) ?: emptyList()
+        cache[inputLower] = result
+        return result
     }
 }

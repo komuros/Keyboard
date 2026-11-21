@@ -179,4 +179,8 @@ dependencies {
     implementation(libs.bundles.room)
     ksp(libs.androidx.room.compiler)
     detektPlugins(libs.compose.detekt)
+
+    testImplementation(libs.junit)
+    // real org.json implementation for local unit tests (android.jar only has stubs)
+    testImplementation(libs.json)
 }
