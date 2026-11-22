@@ -365,6 +365,21 @@
             </RelativeLayout>
 
             <RelativeLayout
+                android:id="@+id/settings_show_autofill_button_holder"
+                style="@style/SettingsHolderSwitchStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <org.fossify.commons.views.MyMaterialSwitch
+                    android:id="@+id/settings_show_autofill_button"
+                    style="@style/SettingsSwitchStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/show_autofill_button" />
+
+            </RelativeLayout>
+
+            <RelativeLayout
                 android:id="@+id/settings_dictionnary_holder"
                 style="@style/SettingsHolderTextViewStyle"
                 android:layout_width="match_parent"
@@ -384,6 +399,36 @@
                     android:layout_height="wrap_content"
                     android:layout_below="@+id/settings_dictionnary"
                     tools:text="@string/dictionnary_not_installed" />
+
+            </RelativeLayout>
+
+            <RelativeLayout
+                android:id="@+id/settings_learn_from_typing_holder"
+                style="@style/SettingsHolderSwitchStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <org.fossify.commons.views.MyMaterialSwitch
+                    android:id="@+id/settings_learn_from_typing"
+                    style="@style/SettingsSwitchStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/learn_from_typing" />
+
+            </RelativeLayout>
+
+            <RelativeLayout
+                android:id="@+id/settings_clear_learned_data_holder"
+                style="@style/SettingsHolderTextViewStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <org.fossify.commons.views.MyTextView
+                    android:id="@+id/settings_clear_learned_data"
+                    style="@style/SettingsTextLabelStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/clear_learned_data" />
 
             </RelativeLayout>
 

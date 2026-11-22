@@ -92,6 +92,15 @@ class DictionaryIndexTest {
     }
 
     @Test
+    fun `personal boost can promote a rare word to the top`() {
+        // "trumpet" (rank 1) vs "trump" (rank 2) for prefix "tr": rank wins without boost…
+        assertEquals(listOf("trump", "trumpet"), index.findSuggestions("tr"))
+        // …and a personal boost flips the order
+        val boosted = index.findSuggestions("tr") { if (it == "trumpet") 100.0 else 0.0 }
+        assertEquals(listOf("trumpet", "trump"), boosted)
+    }
+
+    @Test
     fun `empty index validates nothing and suggests nothing`() {
         assertEquals(0, DictionaryIndex.EMPTY.size)
         assertFalse(DictionaryIndex.EMPTY.isValidWord("the"))

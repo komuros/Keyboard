@@ -131,6 +131,14 @@ class Config(context: Context) : BaseConfig(context) {
         get() = prefs.getBoolean(AUTO_CORRECT_ON_SPACE, false)
         set(autoCorrectOnSpace) = prefs.edit().putBoolean(AUTO_CORRECT_ON_SPACE, autoCorrectOnSpace).apply()
 
+    var learnFromTyping: Boolean
+        get() = prefs.getBoolean(LEARN_FROM_TYPING, false)
+        set(learnFromTyping) = prefs.edit().putBoolean(LEARN_FROM_TYPING, learnFromTyping).apply()
+
+    var showAutofillButton: Boolean
+        get() = prefs.getBoolean(SHOW_AUTOFILL_BUTTON, true)
+        set(showAutofillButton) = prefs.edit().putBoolean(SHOW_AUTOFILL_BUTTON, showAutofillButton).apply()
+
     var recentlyUsedEmojis: List<String>
         get() = prefs.getString(RECENTLY_USED_EMOJIS, "\uD83D\uDC30")!!.split("|").filter { it.isNotEmpty() }
         set(recentlyUsedEmojis) = prefs.edit().putString(

@@ -48,4 +48,10 @@ interface OnKeyboardActionListener {
      * Called when input method is changed in-app.
      */
     fun changeInputMethod(id: String, subtype: InputMethodSubtype)
+
+    /**
+     * Called when the user taps the autofill button in the toolbar, asking the active
+     * autofill service (e.g. Bitwarden) to show its suggestions for the current field.
+     */
+    fun onAutofillRequested()
 }

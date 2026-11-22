@@ -20,7 +20,11 @@ private const val CACHE_SIZE = 20
  * matching logic lives in [DictionaryIndex] (pure Kotlin, unit-tested); this class only
  * handles loading, debouncing and the suggestion cache.
  */
-class SpellChecker(context: Context, private val dictionaryLang: String = DEFAULT_DICTIONARY_LANG) {
+class SpellChecker(
+    context: Context,
+    private val dictionaryLang: String = DEFAULT_DICTIONARY_LANG,
+    private val userLanguageModel: UserLanguageModel? = null
+) {
     private val appContext = context.applicationContext
 
     // null until the dictionary is loaded: isValidWord() then answers true (no auto-correct)
@@ -70,9 +74,14 @@ class SpellChecker(context: Context, private val dictionaryLang: String = DEFAUL
 
     fun isValidWord(word: String): Boolean = index?.isValidWord(word) ?: true
 
-    /** see [DictionaryIndex.nextWordSuggestions] */
-    fun nextWordSuggestions(exclude: String? = null): List<String> =
-        index?.nextWordSuggestions(exclude) ?: emptyList()
+    /**
+     * Words most likely to follow [afterWord]: bigram predictions from the on-device user
+     * language model when it is enabled and has data, else the most frequent dictionary words.
+     */
+    fun nextWordSuggestions(afterWord: String? = null): List<String> {
+        val bigram = afterWord?.let { userLanguageModel?.nextWordSuggestions(it).orEmpty() } ?: emptyList()
+        return bigram.ifEmpty { index?.nextWordSuggestions(exclude = afterWord) ?: emptyList() }
+    }
 
     fun destroy() {
         pendingRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -114,9 +123,14 @@ class SpellChecker(context: Context, private val dictionaryLang: String = DEFAUL
     }
 
     private fun findSuggestions(input: String): List<String> {
+        val idx = index ?: return emptyList()
+        // with a user language model the personal boost changes over time: bypass the cache
+        if (userLanguageModel != null) {
+            return idx.findSuggestions(input) { userLanguageModel.personalBoost(it) }
+        }
         val inputLower = input.lowercase()
         cache[inputLower]?.let { return it }
-        val result = index?.findSuggestions(input) ?: emptyList()
+        val result = idx.findSuggestions(input)
         cache[inputLower] = result
         return result
     }

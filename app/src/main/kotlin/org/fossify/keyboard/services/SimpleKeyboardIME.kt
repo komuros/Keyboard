@@ -20,14 +20,18 @@ import android.text.InputType.TYPE_MASK_CLASS
 import android.text.InputType.TYPE_MASK_VARIATION
 import android.text.InputType.TYPE_NULL
 import android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+import android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
 import android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
 import android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+import android.text.InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
 import android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
 import android.text.TextUtils
 import android.util.Size
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.autofill.AutofillManager
 import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.EditorInfo.IME_ACTION_NONE
@@ -60,6 +64,7 @@ import org.fossify.commons.extensions.getProperBackgroundColor
 import org.fossify.commons.extensions.getProperTextColor
 import org.fossify.commons.extensions.getSharedPrefs
 import org.fossify.commons.extensions.setSystemBarsAppearance
+import org.fossify.commons.extensions.toast
 import org.fossify.commons.helpers.ACCENT_COLOR
 import org.fossify.commons.helpers.BACKGROUND_COLOR
 import org.fossify.commons.helpers.CUSTOM_ACCENT_COLOR
@@ -80,6 +85,7 @@ import org.fossify.keyboard.extensions.getKeyboardBackgroundColor
 import org.fossify.keyboard.extensions.getKeyboardLanguageText
 import org.fossify.keyboard.extensions.getSelectedLanguagesSorted
 import org.fossify.keyboard.extensions.getStrokeColor
+import org.fossify.keyboard.extensions.isDeviceLocked
 import org.fossify.keyboard.extensions.safeStorageContext
 import org.fossify.keyboard.helpers.HEIGHT_PERCENTAGE
 import org.fossify.keyboard.helpers.KEYBOARD_LANGUAGE
@@ -128,10 +134,12 @@ import org.fossify.keyboard.helpers.LANGUAGE_UKRAINIAN
 import org.fossify.keyboard.helpers.AUTO_CORRECT_ON_SPACE
 import org.fossify.keyboard.helpers.DEFAULT_DICTIONARY_LANG
 import org.fossify.keyboard.helpers.MyKeyboard
+import org.fossify.keyboard.helpers.SHOW_AUTOFILL_BUTTON
 import org.fossify.keyboard.helpers.SHOW_KEY_BORDERS
 import org.fossify.keyboard.helpers.SHOW_SUGGESTIONS
 import org.fossify.keyboard.helpers.SHOW_NUMBERS_ROW
 import org.fossify.keyboard.helpers.ShiftState
+import org.fossify.keyboard.helpers.UserLanguageModel
 import org.fossify.keyboard.helpers.SpellChecker
 import org.fossify.keyboard.helpers.dictionaryLangForKeyboardLanguage
 import org.fossify.keyboard.helpers.VOICE_INPUT_METHOD
@@ -148,6 +156,12 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
         // How quickly do we have to double tap shift to enable permanent caps lock
         private var SHIFT_PERM_TOGGLE_SPEED = 500
         private const val DIVIDER_ALPHA = 0.3f
+
+        // punctuation that ends a word (and commits it): the buffered word is learned
+        const val WORD_END_PUNCTUATION = ".,!?;:"
+
+        // how far around the cursor to look when rebuilding the word buffer from the editor
+        const val MAX_WORD_LOOKUP = 64
 
         // Keyboard modes
         const val KEYBOARD_LETTERS = 0
@@ -172,6 +186,16 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     private var currentSuggestions: List<String> = emptyList()
     // last suggestion applied by tapping the strip, excluded from the next-word predictions
     private var lastAppliedSuggestion: String? = null
+    // on-device bigram model learned from typing (opt-in), shared with the settings screen
+    private val userLanguageModel by lazy { UserLanguageModel.get(this) }
+    // last word committed to the editor, used as bigram context for the next-word prediction
+    private var lastCommittedWord: String? = null
+    // true when the first letter of the buffered word was typed uppercase (shift/caps)
+    private var wordBufferStartsCapital = false
+    // word part after the cursor (when editing mid-word), so a suggestion replaces the whole word
+    private var wordSuffix = ""
+
+    private val autofillManager: AutofillManager? by lazy { getSystemService(AutofillManager::class.java) }
 
     private lateinit var binding: KeyboardViewKeyboardBinding
 
@@ -209,7 +233,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
             return
         }
         val dictionaryLang = dictionaryLangForKeyboardLanguage(config.keyboardLanguage) ?: DEFAULT_DICTIONARY_LANG
-        spellChecker = SpellChecker(this, dictionaryLang)
+        spellChecker = SpellChecker(this, dictionaryLang, userLanguageModel)
         spellChecker?.onSuggestionsReady = { suggestions ->
             if (isPasswordField()) {
                 clearSpellSuggestions()
@@ -234,6 +258,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     override fun onStartInputView(editorInfo: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(editorInfo, restarting)
         updateBackgroundColors()
+        updateAutofillButtonVisibility()
         binding.keyboardHolder.post {
             ViewCompat.requestApplyInsets(binding.keyboardHolder)
         }
@@ -257,8 +282,11 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
             breakIterator = BreakIterator.getCharacterInstance(ULocale.getDefault())
         }
         updateShiftKeyState()
-        wordBuffer.clear()
+        clearWordBuffer()
+        // new input field: forget the previous word (bigram context)
+        lastCommittedWord = null
         clearSpellSuggestions()
+        updateAutofillButtonVisibility()
     }
 
     private fun updateShiftKeyState() {
@@ -331,6 +359,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
                 }
                 if (wordBuffer.isNotEmpty()) wordBuffer.deleteAt(wordBuffer.length - 1)
                 if (wordBuffer.isEmpty()) {
+                    wordBufferStartsCapital = false
                     if (endsWithSpaceBeforeCursor()) {
                         showNextWordSuggestions()
                     } else {
@@ -478,13 +507,45 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
                         }
                     }
 
-                    if (Character.isLetter(codeChar)) {
-                        wordBuffer.append(codeChar.lowercaseChar())
-                        lastAppliedSuggestion = null
-                        triggerSpellCheck()
-                    } else {
-                        wordBuffer.clear()
-                        clearSpellSuggestions()
+                    when {
+                        Character.isLetter(codeChar) -> {
+                            if (isPasswordField()) {
+                                // never keep password content in memory
+                                clearWordBuffer()
+                                clearSpellSuggestions()
+                            } else {
+                                if (wordBuffer.isEmpty() && Character.isUpperCase(codeChar)) {
+                                    wordBufferStartsCapital = true
+                                }
+                                wordBuffer.append(codeChar.lowercaseChar())
+                                consumeSuffixChar()
+                                lastAppliedSuggestion = null
+                                triggerSpellCheck()
+                            }
+                        }
+
+                        isWordApostrophe(codeChar) && wordBuffer.isNotEmpty() && !isPasswordField() -> {
+                            // keep elisions/contractions whole ("l'homme", "don't"): the
+                            // apostrophe stays in the word buffer (normalized to '), the
+                            // spell checker looks up the part after it and re-attaches the
+                            // prefix to the suggestions
+                            wordBuffer.append('\'')
+                            consumeSuffixChar()
+                            lastAppliedSuggestion = null
+                            triggerSpellCheck()
+                        }
+
+                        else -> {
+                            // word-ending punctuation commits the buffered word: learn it
+                            // (opt-in, never in password fields), then reset the bigram context
+                            if (wordBuffer.isNotEmpty() && codeChar in WORD_END_PUNCTUATION) {
+                                learnWord(wordBuffer.toString() + wordSuffix)
+                                lastCommittedWord = null
+                            }
+                            clearWordBuffer()
+                            wordSuffix = ""
+                            clearSpellSuggestions()
+                        }
                     }
                 }
             }
@@ -589,17 +650,64 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
 
         val expectedPosition = oldSelEnd + 1
         if (newSelStart != expectedPosition || newSelStart != newSelEnd) {
-            wordBuffer.clear()
-            if (newSelStart == newSelEnd && endsWithSpaceBeforeCursor()) {
-                // cursor moved right after a space (or a suggestion was just applied):
-                // propose the most probable next words
-                showNextWordSuggestions(afterWord = lastAppliedSuggestion)
+            // cursor moved (arrow keys, tap, delete, ...): if it now sits inside a word,
+            // rebuild the word buffer from the editor text so suggestions still account for
+            // the beginning of the word being corrected
+            val synced = newSelStart == newSelEnd && !isPasswordField() && syncWordBufferFromEditor()
+            if (synced) {
+                triggerSpellCheck()
             } else {
-                clearSpellSuggestions()
+                clearWordBuffer()
+                wordSuffix = ""
+                if (newSelStart == newSelEnd && endsWithSpaceBeforeCursor()) {
+                    // cursor moved right after a space (or a suggestion was just applied):
+                    // propose the most probable next words
+                    showNextWordSuggestions(afterWord = lastAppliedSuggestion)
+                } else {
+                    clearSpellSuggestions()
+                }
             }
         }
 
         updateShiftKeyState()
+    }
+
+    private fun isWordChar(c: Char): Boolean = c.isLetter() || c == '\'' || c == '’'
+
+    /**
+     * Rebuilds [wordBuffer] and [wordSuffix] from the editor text around the cursor when the
+     * cursor sits inside a word. Returns true when a word was found. Never called for password
+     * fields (the caller guards).
+     */
+    private fun syncWordBufferFromEditor(): Boolean {
+        val connection = currentInputConnection ?: return false
+        val before = connection.getTextBeforeCursor(MAX_WORD_LOOKUP, 0)?.toString().orEmpty()
+        val after = connection.getTextAfterCursor(MAX_WORD_LOOKUP, 0)?.toString().orEmpty()
+        if (before.isEmpty() || !isWordChar(before.last())) {
+            return false
+        }
+
+        // word part before the cursor: scan back over word characters
+        var start = before.length
+        while (start > 0 && isWordChar(before[start - 1])) {
+            start--
+        }
+        val prefix = before.substring(start)
+        if (!prefix.any { it.isLetter() }) {
+            return false
+        }
+
+        // word part after the cursor: scan forward over word characters
+        var end = 0
+        while (end < after.length && isWordChar(after[end])) {
+            end++
+        }
+        wordSuffix = after.substring(0, end)
+
+        clearWordBuffer()
+        wordBuffer.append(prefix.lowercase().replace('’', '\''))
+        wordBufferStartsCapital = prefix.first().isUpperCase()
+        return true
     }
 
     override fun onUpdateCursorAnchorInfo(cursorAnchorInfo: CursorAnchorInfo?) {
@@ -735,6 +843,9 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (key == SHOW_AUTOFILL_BUTTON) {
+            updateAutofillButtonVisibility()
+        }
         if (key == KEYBOARD_LANGUAGE || key == SHOW_SUGGESTIONS || key == AUTO_CORRECT_ON_SPACE) {
             // (re)create or tear down the spell checker depending on whether suggestions or
             // auto-correct are enabled, and reload the dictionary of the newly selected language
@@ -834,10 +945,11 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
         return keyboard
     }
 
+    @SuppressLint("ClickableViewAccessibility") // performClick() is called in the touch handler
     private fun showSpellSuggestions(suggestions: List<String>) {
         if (suggestions.isEmpty()) {
             binding.spellSuggestionsHolder.beGone()
-            binding.clipboardValue.beVisibleIf(config.showClipboardContent)
+            binding.clipboardValue.beVisibleIf(config.showClipboardContent && !isPasswordField())
             return
         }
 
@@ -847,9 +959,23 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
         val textColor = safeStorageContext.getProperTextColor()
         val dividerColor = textColor.adjustAlpha(DIVIDER_ALPHA)
 
-        val slot0 = suggestions.getOrNull(1)
-        val slot1 = suggestions.getOrNull(0) // best candidate in middle
-        val slot2 = suggestions.getOrNull(2)
+        // show the suggestions with the capitalization of the word being typed ("Salu" ->
+        // "Salut"); applySuggestion capitalizes again at commit time, a no-op on these
+        val displayed = if (suggestionShouldBeCapitalized()) {
+            suggestions.map { it.replaceFirstChar { c -> c.uppercase() } }
+        } else {
+            suggestions
+        }
+
+        // the gaps between slots (dividers, padding) forward to the nearest slot, so the
+        // whole bar is one big touch target
+        binding.spellSuggestionsHolder.setOnTouchListener { view, event ->
+            dispatchSuggestionBarTouch(displayed, view, event)
+        }
+
+        val slot0 = displayed.getOrNull(1)
+        val slot1 = displayed.getOrNull(0) // best candidate in middle
+        val slot2 = displayed.getOrNull(2)
 
         binding.suggestionSlot0.apply {
             text = slot0 ?: ""
@@ -876,20 +1002,92 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
         currentSuggestions = emptyList()
         if (::binding.isInitialized) {
             binding.spellSuggestionsHolder.beGone()
-            binding.clipboardValue.beVisibleIf(config.showClipboardContent)
+            binding.clipboardValue.beVisibleIf(config.showClipboardContent && !isPasswordField())
         }
     }
 
+    /**
+     * Learns a word that was committed to the editor into the on-device user language model.
+     * Only when the user opted in (learnFromTyping) and never in password fields.
+     */
+    private fun learnWord(word: String) {
+        if (!config.learnFromTyping || isPasswordField()) {
+            return
+        }
+        userLanguageModel.recordWord(word, lastCommittedWord)
+        lastCommittedWord = word.lowercase()
+    }
+
+    /**
+     * True when the word about to be committed should start with a capital. When a word is
+     * being typed, the buffer is lowercase so the real case is read from the editor text;
+     * when the buffer is empty (next-word prediction tapped), follow the shift state, which
+     * the IME sets to ON_ONE_CHAR at the start of a sentence.
+     */
+    private fun suggestionShouldBeCapitalized(): Boolean {
+        if (wordBuffer.isNotEmpty()) {
+            if (wordBufferStartsCapital) {
+                return true
+            }
+            // fallback: read the real case from the editor text before the cursor
+            val currentWord = wordBuffer.toString()
+            val before = currentInputConnection?.getTextBeforeCursor(currentWord.length, 0)?.toString().orEmpty()
+            return before.firstOrNull()?.isUpperCase() == true
+        }
+        // empty buffer (next-word prediction tapped): follow the shift state, which the IME
+        // sets to ON_ONE_CHAR at the start of a sentence
+        return (keyboard?.mShiftState ?: ShiftState.OFF) > ShiftState.OFF
+    }
+
+    private fun clearWordBuffer() {
+        wordBuffer.clear()
+        wordBufferStartsCapital = false
+    }
+
+    /**
+     * Handles a tap anywhere on the suggestion bar (including dividers and padding): the x
+     * position selects the nearest slot. Returns true when the tap was consumed.
+     */
+    private fun dispatchSuggestionBarTouch(displayed: List<String>, view: View, event: MotionEvent): Boolean {
+        if (event.action != MotionEvent.ACTION_UP || displayed.isEmpty()) {
+            return false
+        }
+        val slotWidth = view.width.toFloat() / displayed.size
+        val index = (event.x / slotWidth).toInt().coerceIn(0, displayed.size - 1)
+        applySuggestion(displayed[index])
+        view.performClick()
+        return true
+    }
+
+    /** typing a char mid-word consumes one char of the word part after the cursor */
+    private fun consumeSuffixChar() {
+        if (wordSuffix.isNotEmpty()) {
+            wordSuffix = wordSuffix.substring(1)
+        }
+    }
+
+    /** applies the capitalization of the current word start to a suggestion */
+    private fun withUserCapitalization(word: String): String =
+        if (word.isNotEmpty() && suggestionShouldBeCapitalized()) {
+            word.replaceFirstChar { it.uppercase() }
+        } else {
+            word
+        }
+
     private fun applySuggestion(word: String) {
         val currentWord = wordBuffer.toString()
+        val finalWord = withUserCapitalization(word)
         if (currentWord.isNotEmpty()) {
-            currentInputConnection?.deleteSurroundingText(currentWord.length, 0)
+            // replace the whole word around the cursor (prefix in the buffer + suffix)
+            currentInputConnection?.deleteSurroundingText(currentWord.length, wordSuffix.length)
         }
-        currentInputConnection?.commitText("$word ", 1)
-        wordBuffer.clear()
+        currentInputConnection?.commitText("$finalWord ", 1)
+        learnWord(word)
+        clearWordBuffer()
+        wordSuffix = ""
         // the suggestion is committed with a trailing space: predict the next word
-        lastAppliedSuggestion = word
-        showNextWordSuggestions(afterWord = word)
+        lastAppliedSuggestion = finalWord
+        showNextWordSuggestions(afterWord = finalWord)
     }
 
     private fun isPasswordField(): Boolean {
@@ -897,6 +1095,73 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
             inputTypeClassVariation == TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
             inputTypeClassVariation == TYPE_TEXT_VARIATION_WEB_PASSWORD ||
             inputTypeClassVariation == TYPE_NUMBER_VARIATION_PASSWORD
+    }
+
+    private fun isWordApostrophe(c: Char): Boolean = c == '\'' || c == '’'
+
+    private fun isEmailField(): Boolean {
+        return inputTypeClassVariation == TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            inputTypeClassVariation == TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+    }
+
+    private fun isAutofillServiceEnabled(): Boolean {
+        val manager = autofillManager ?: return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // returns null when no autofill service (Bitwarden, 1Password, ...) is enabled
+            return manager.getAutofillServiceComponentName() != null
+        }
+        return manager.isAutofillSupported
+    }
+
+    /**
+     * Shows the autofill button in the top bar when the current editor looks like a credential
+     * field (password or email input type, the only autofillable fields an IME can detect from
+     * [EditorInfo]) and an autofill service like Bitwarden is enabled on the device. On
+     * Android 11+ the service can also push inline suggestions into the top bar by itself via
+     * [onInlineSuggestionsResponse].
+     *
+     * Called on every keyboard display ([onStartInputView] / [onStartInput]) so a service that
+     * appears or disappears while the keyboard is closed is picked up on the next display.
+     * Checks are ordered cheapest first: the autofill service lookup is a binder call and only
+     * runs when the button could actually be shown. Never called from the per-keystroke path.
+     */
+    private fun updateAutofillButtonVisibility() {
+        if (!::binding.isInitialized) {
+            return
+        }
+        if (!config.showAutofillButton) {
+            binding.autofillButton.beGone()
+            return
+        }
+
+        val visible = isAutofillableField() &&
+            !safeStorageContext.isDeviceLocked &&
+            isAutofillServiceEnabled()
+
+        binding.autofillButton.beVisibleIf(visible)
+    }
+
+    private fun isAutofillableField(): Boolean {
+        val editorInfo = currentInputEditorInfo
+        return editorInfo != null &&
+            editorInfo.inputType != TYPE_NULL &&
+            (isPasswordField() || isEmailField())
+    }
+
+    override fun onAutofillRequested() {
+        // reachable only from the toolbar button, which is visible only when the "show
+        // autofill button" option is on: never toast nor trigger anything when it is off
+        if (!config.showAutofillButton) {
+            return
+        }
+        if (!isAutofillServiceEnabled()) {
+            toast(R.string.autofill_no_service)
+            return
+        }
+
+        // asks the served editor to trigger its autofill UI: the active service then shows
+        // its own dropdown, or inline suggestions rendered in this keyboard's top bar
+        currentInputConnection?.performContextMenuAction(android.R.id.autofill)
     }
 
     private fun triggerSpellCheck() {
@@ -928,13 +1193,19 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
             spellChecker?.isValidWord(currentWord) == false
 
         if (shouldAutoCorrect) {
-            currentInputConnection?.deleteSurroundingText(currentWord.length, 0)
-            currentInputConnection?.commitText("$topSuggestion ", 1)
+            val finalSuggestion = withUserCapitalization(topSuggestion!!)
+            currentInputConnection?.deleteSurroundingText(currentWord.length, wordSuffix.length)
+            currentInputConnection?.commitText("$finalSuggestion ", 1)
+            learnWord(topSuggestion)
         } else {
             currentInputConnection?.commitText(" ", 1)
+            if (currentWord.isNotEmpty()) {
+                learnWord(currentWord + wordSuffix)
+            }
         }
+        wordSuffix = ""
 
-        wordBuffer.clear()
+        clearWordBuffer()
         // the cursor now sits right after a space: propose the most probable next
         // words so one can be picked before its first letter is typed
         lastAppliedSuggestion = if (shouldAutoCorrect) topSuggestion else currentWord
@@ -950,7 +1221,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
             clearSpellSuggestions()
             return
         }
-        val suggestions = spellChecker?.nextWordSuggestions(exclude = afterWord).orEmpty()
+        val suggestions = spellChecker?.nextWordSuggestions(afterWord = afterWord).orEmpty()
         currentSuggestions = suggestions
         if (suggestions.isEmpty()) {
             clearSpellSuggestions()

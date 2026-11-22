@@ -9,6 +9,10 @@ private const val MAX_LENGTH_DIFF = 2
 private const val MAX_EDIT_DISTANCE = 2
 private const val MIN_WORD_LENGTH = 2
 
+// weight of the personal (user language model) boost relative to the dictionary rank: a word
+// typed ~1000 times (boost ~3) gains ~15000 points, enough to outrank frequent dictionary words
+private const val PERSONAL_WEIGHT = 5_000.0
+
 /**
  * Pure, Android-free word index built from a dictionary JSON file
  * ([ [word, log10(frequency)], ... ], most frequent first).
@@ -54,7 +58,11 @@ class DictionaryIndex private constructor(
             .toList()
     }
 
-    fun findSuggestions(input: String): List<String> {
+    /**
+     * Suggests completions/corrections for [input]. [boost] adds a personal score per word
+     * (from the on-device user language model, 0.0 when absent) on top of the dictionary rank.
+     */
+    fun findSuggestions(input: String, boost: (String) -> Double = { 0.0 }): List<String> {
         val inputLower = input.lowercase().replace('’', '\'')
         // an apostrophe inside the typed word (elision/contraction like "l'ho" or "don'"):
         // look up the part after the last apostrophe, then re-attach the prefix so the
@@ -68,7 +76,7 @@ class DictionaryIndex private constructor(
 
         val prefixMatches = ranks.keys
             .filter { word -> word.startsWith(lookup) && word != lookup }
-            .sortedByDescending { ranks[it] ?: 0 }
+            .sortedByDescending { (ranks[it] ?: 0) + PERSONAL_WEIGHT * boost(it) }
             .take(MAX_SUGGESTIONS)
             .map { prefix + (display[it] ?: it) }
 
@@ -82,7 +90,7 @@ class DictionaryIndex private constructor(
             .filter { word -> word[0] == firstChar && abs(word.length - lookupLen) <= MAX_LENGTH_DIFF }
             .map { word -> word to levenshteinDistance(lookup, word) }
             .filter { it.second <= MAX_EDIT_DISTANCE }
-            .sortedWith(compareBy({ it.second }, { -(ranks[it.first] ?: 0) }))
+            .sortedWith(compareBy({ it.second }, { -((ranks[it.first] ?: 0) + PERSONAL_WEIGHT * boost(it.first)) }))
             .take(MAX_SUGGESTIONS)
             .map { prefix + (display[it.first] ?: it.first) }
     }

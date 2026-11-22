@@ -27,6 +27,7 @@ import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_160_PERCENT
 import org.fossify.keyboard.helpers.DEFAULT_DICTIONARY_LANG
 import org.fossify.keyboard.helpers.DICTIONNARY_EXTRA_LANG
 import org.fossify.keyboard.helpers.DictionnaryClient
+import org.fossify.keyboard.helpers.UserLanguageModel
 import org.fossify.keyboard.helpers.DictionnaryInstaller
 import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_70_PERCENT
 import org.fossify.keyboard.helpers.KEYBOARD_HEIGHT_80_PERCENT
@@ -84,6 +85,8 @@ class SettingsActivity : SimpleActivity() {
         setupShowNumbersRow()
         setupShowSuggestions()
         setupAutoCorrect()
+        setupShowAutofillButton()
+        setupLearnFromTyping()
         setupDictionnaryStatus()
         setupVoiceInputMethod()
         maybeProposeDictionnaryInstall()
@@ -458,6 +461,31 @@ class SettingsActivity : SimpleActivity() {
                 if (settingsAutoCorrect.isChecked) {
                     ensureDictionaryForCurrentLanguage()
                 }
+            }
+        }
+    }
+
+    private fun setupShowAutofillButton() {
+        binding.apply {
+            settingsShowAutofillButton.isChecked = config.showAutofillButton
+            settingsShowAutofillButtonHolder.setOnClickListener {
+                settingsShowAutofillButton.toggle()
+                config.showAutofillButton = settingsShowAutofillButton.isChecked
+            }
+        }
+    }
+
+    private fun setupLearnFromTyping() {
+        binding.apply {
+            settingsLearnFromTyping.isChecked = config.learnFromTyping
+            settingsLearnFromTypingHolder.setOnClickListener {
+                settingsLearnFromTyping.toggle()
+                config.learnFromTyping = settingsLearnFromTyping.isChecked
+            }
+            settingsClearLearnedDataHolder.setOnClickListener {
+                // shared per-process instance: also clears the IME's in-memory model
+                UserLanguageModel.get(this@SettingsActivity).clear()
+                toast(R.string.learned_data_cleared)
             }
         }
     }
