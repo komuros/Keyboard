@@ -35,6 +35,10 @@ const val SHOW_SUGGESTIONS = "show_suggestions"
 const val AUTO_CORRECT_ON_SPACE = "auto_correct_on_space"
 const val DICTIONARY_LANGUAGE_PROPOSED = "dictionnary_language_proposed"
 
+// opt-in (default false): learn a local bigram language model from what the user types,
+// stored only in the app's private filesDir, never in password fields
+const val LEARN_FROM_TYPING = "learn_from_typing"
+
 // the keyboard app has no internet permission: the external Dictionnary app downloads the
 // language files of the auto-correct and shares them through this content provider authority
 const val DICTIONNARY_AUTHORITY = "org.fossify.dictionnary.provider"
