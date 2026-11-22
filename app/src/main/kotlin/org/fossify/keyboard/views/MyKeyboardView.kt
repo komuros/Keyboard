@@ -31,6 +31,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.animation.AccelerateInterpolator
+import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -212,6 +213,7 @@ class MyKeyboardView @JvmOverloads constructor(
     private var mClipboardManagerHolder: View? = null
     private var mEmojiPaletteHolder: View? = null
     private var emojiCompatMetadataVersion = 0
+    private var currentInputType = 0
 
     // For multi-tap
     private var mLastTapTime = 0L
@@ -403,6 +405,12 @@ class MyKeyboardView @JvmOverloads constructor(
                 toggleClipboardVisibility(false)
             }
 
+            autofillButton.setOnLongClickListener { context.toast(R.string.autofill); true; }
+            autofillButton.setOnClickListener {
+                vibrateIfNeeded()
+                mOnKeyboardActionListener?.onAutofillRequested()
+            }
+
             suggestionsHolder.addOnLayoutChangeListener(object : OnLayoutChangeListener {
                 override fun onLayoutChange(
                     v: View?,
@@ -455,6 +463,16 @@ class MyKeyboardView @JvmOverloads constructor(
     fun setEditorInfo(editorInfo: EditorInfo) {
         emojiCompatMetadataVersion =
             editorInfo.extras?.getInt(EmojiCompat.EDITOR_INFO_METAVERSION_KEY, 0) ?: 0
+        currentInputType = editorInfo.inputType
+    }
+
+    private fun isPasswordEditor(): Boolean {
+        val variation = currentInputType and InputType.TYPE_MASK_VARIATION
+        val clazz = currentInputType and InputType.TYPE_MASK_CLASS
+        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            (clazz == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
     }
 
     fun setupKeyboard(changedView: View? = null) {
@@ -514,6 +532,7 @@ class MyKeyboardView @JvmOverloads constructor(
             settingsCog.applyColorFilter(mTextColor)
             pinnedClipboardItems.applyColorFilter(mTextColor)
             clipboardClear.applyColorFilter(mTextColor)
+            autofillButton.applyColorFilter(mTextColor)
             voiceInputButton.applyColorFilter(mTextColor)
             voiceInputButton.beGoneIf(mVoiceInputMethod.isEmpty())
 
@@ -912,6 +931,11 @@ class MyKeyboardView @JvmOverloads constructor(
     }
 
     private fun handleClipboard() {
+        if (isPasswordEditor()) {
+            // never show clipboard content on top of a password field
+            hideClipboardViews()
+            return
+        }
         if (mToolbarHolder != null && mPopupParent.id != R.id.mini_keyboard_view && context.config.showClipboardContent) {
             val clipboardContent = context.getCurrentClip()
             if (clipboardContent?.isNotEmpty() == true) {

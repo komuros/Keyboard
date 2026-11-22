@@ -47,6 +47,10 @@
     <string name="show_language_switch_key">Show language switch key</string>
     <string name="show_suggestions">Show word suggestions</string>
     <string name="auto_correct_on_space">Auto-correct on space</string>
+    <string name="show_autofill_button">Show autofill button</string>
+    <!-- Autofill -->
+    <string name="autofill">Autofill</string>
+    <string name="autofill_no_service">No autofill service is enabled on this device</string>
     <string name="learn_from_typing">Learn from my typing (stored locally only)</string>
     <string name="clear_learned_data">Clear learned typing data</string>
     <string name="learned_data_cleared">Learned typing data cleared</string>

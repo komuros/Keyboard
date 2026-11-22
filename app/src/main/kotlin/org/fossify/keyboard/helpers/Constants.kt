@@ -33,6 +33,7 @@ const val VOICE_INPUT_METHOD = "voice_input_method"
 const val RECENTLY_USED_EMOJIS = "recently_used_emojis"
 const val SHOW_SUGGESTIONS = "show_suggestions"
 const val AUTO_CORRECT_ON_SPACE = "auto_correct_on_space"
+const val SHOW_AUTOFILL_BUTTON = "show_autofill_button"
 const val DICTIONARY_LANGUAGE_PROPOSED = "dictionnary_language_proposed"
 
 // opt-in (default false): learn a local bigram language model from what the user types,

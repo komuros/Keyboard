@@ -85,6 +85,7 @@ class SettingsActivity : SimpleActivity() {
         setupShowNumbersRow()
         setupShowSuggestions()
         setupAutoCorrect()
+        setupShowAutofillButton()
         setupLearnFromTyping()
         setupDictionnaryStatus()
         setupVoiceInputMethod()
@@ -460,6 +461,16 @@ class SettingsActivity : SimpleActivity() {
                 if (settingsAutoCorrect.isChecked) {
                     ensureDictionaryForCurrentLanguage()
                 }
+            }
+        }
+    }
+
+    private fun setupShowAutofillButton() {
+        binding.apply {
+            settingsShowAutofillButton.isChecked = config.showAutofillButton
+            settingsShowAutofillButtonHolder.setOnClickListener {
+                settingsShowAutofillButton.toggle()
+                config.showAutofillButton = settingsShowAutofillButton.isChecked
             }
         }
     }

@@ -365,6 +365,21 @@
             </RelativeLayout>
 
             <RelativeLayout
+                android:id="@+id/settings_show_autofill_button_holder"
+                style="@style/SettingsHolderSwitchStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <org.fossify.commons.views.MyMaterialSwitch
+                    android:id="@+id/settings_show_autofill_button"
+                    style="@style/SettingsSwitchStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/show_autofill_button" />
+
+            </RelativeLayout>
+
+            <RelativeLayout
                 android:id="@+id/settings_dictionnary_holder"
                 style="@style/SettingsHolderTextViewStyle"
                 android:layout_width="match_parent"

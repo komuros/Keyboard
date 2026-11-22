@@ -20,8 +20,10 @@ import android.text.InputType.TYPE_MASK_CLASS
 import android.text.InputType.TYPE_MASK_VARIATION
 import android.text.InputType.TYPE_NULL
 import android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+import android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
 import android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
 import android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+import android.text.InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
 import android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
 import android.text.TextUtils
 import android.util.Size
@@ -29,6 +31,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.autofill.AutofillManager
 import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.EditorInfo.IME_ACTION_NONE
@@ -61,6 +64,7 @@ import org.fossify.commons.extensions.getProperBackgroundColor
 import org.fossify.commons.extensions.getProperTextColor
 import org.fossify.commons.extensions.getSharedPrefs
 import org.fossify.commons.extensions.setSystemBarsAppearance
+import org.fossify.commons.extensions.toast
 import org.fossify.commons.helpers.ACCENT_COLOR
 import org.fossify.commons.helpers.BACKGROUND_COLOR
 import org.fossify.commons.helpers.CUSTOM_ACCENT_COLOR
@@ -81,6 +85,7 @@ import org.fossify.keyboard.extensions.getKeyboardBackgroundColor
 import org.fossify.keyboard.extensions.getKeyboardLanguageText
 import org.fossify.keyboard.extensions.getSelectedLanguagesSorted
 import org.fossify.keyboard.extensions.getStrokeColor
+import org.fossify.keyboard.extensions.isDeviceLocked
 import org.fossify.keyboard.extensions.safeStorageContext
 import org.fossify.keyboard.helpers.HEIGHT_PERCENTAGE
 import org.fossify.keyboard.helpers.KEYBOARD_LANGUAGE
@@ -129,6 +134,7 @@ import org.fossify.keyboard.helpers.LANGUAGE_UKRAINIAN
 import org.fossify.keyboard.helpers.AUTO_CORRECT_ON_SPACE
 import org.fossify.keyboard.helpers.DEFAULT_DICTIONARY_LANG
 import org.fossify.keyboard.helpers.MyKeyboard
+import org.fossify.keyboard.helpers.SHOW_AUTOFILL_BUTTON
 import org.fossify.keyboard.helpers.SHOW_KEY_BORDERS
 import org.fossify.keyboard.helpers.SHOW_SUGGESTIONS
 import org.fossify.keyboard.helpers.SHOW_NUMBERS_ROW
@@ -188,6 +194,8 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     private var wordBufferStartsCapital = false
     // word part after the cursor (when editing mid-word), so a suggestion replaces the whole word
     private var wordSuffix = ""
+
+    private val autofillManager: AutofillManager? by lazy { getSystemService(AutofillManager::class.java) }
 
     private lateinit var binding: KeyboardViewKeyboardBinding
 
@@ -250,6 +258,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     override fun onStartInputView(editorInfo: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(editorInfo, restarting)
         updateBackgroundColors()
+        updateAutofillButtonVisibility()
         binding.keyboardHolder.post {
             ViewCompat.requestApplyInsets(binding.keyboardHolder)
         }
@@ -277,6 +286,7 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
         // new input field: forget the previous word (bigram context)
         lastCommittedWord = null
         clearSpellSuggestions()
+        updateAutofillButtonVisibility()
     }
 
     private fun updateShiftKeyState() {
@@ -833,6 +843,9 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (key == SHOW_AUTOFILL_BUTTON) {
+            updateAutofillButtonVisibility()
+        }
         if (key == KEYBOARD_LANGUAGE || key == SHOW_SUGGESTIONS || key == AUTO_CORRECT_ON_SPACE) {
             // (re)create or tear down the spell checker depending on whether suggestions or
             // auto-correct are enabled, and reload the dictionary of the newly selected language
@@ -1085,6 +1098,71 @@ class SimpleKeyboardIME : InputMethodService(), OnKeyboardActionListener, Shared
     }
 
     private fun isWordApostrophe(c: Char): Boolean = c == '\'' || c == '’'
+
+    private fun isEmailField(): Boolean {
+        return inputTypeClassVariation == TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            inputTypeClassVariation == TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+    }
+
+    private fun isAutofillServiceEnabled(): Boolean {
+        val manager = autofillManager ?: return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // returns null when no autofill service (Bitwarden, 1Password, ...) is enabled
+            return manager.getAutofillServiceComponentName() != null
+        }
+        return manager.isAutofillSupported
+    }
+
+    /**
+     * Shows the autofill button in the top bar when the current editor looks like a credential
+     * field (password or email input type, the only autofillable fields an IME can detect from
+     * [EditorInfo]) and an autofill service like Bitwarden is enabled on the device. On
+     * Android 11+ the service can also push inline suggestions into the top bar by itself via
+     * [onInlineSuggestionsResponse].
+     *
+     * Called on every keyboard display ([onStartInputView] / [onStartInput]) so a service that
+     * appears or disappears while the keyboard is closed is picked up on the next display.
+     * Checks are ordered cheapest first: the autofill service lookup is a binder call and only
+     * runs when the button could actually be shown. Never called from the per-keystroke path.
+     */
+    private fun updateAutofillButtonVisibility() {
+        if (!::binding.isInitialized) {
+            return
+        }
+        if (!config.showAutofillButton) {
+            binding.autofillButton.beGone()
+            return
+        }
+
+        val visible = isAutofillableField() &&
+            !safeStorageContext.isDeviceLocked &&
+            isAutofillServiceEnabled()
+
+        binding.autofillButton.beVisibleIf(visible)
+    }
+
+    private fun isAutofillableField(): Boolean {
+        val editorInfo = currentInputEditorInfo
+        return editorInfo != null &&
+            editorInfo.inputType != TYPE_NULL &&
+            (isPasswordField() || isEmailField())
+    }
+
+    override fun onAutofillRequested() {
+        // reachable only from the toolbar button, which is visible only when the "show
+        // autofill button" option is on: never toast nor trigger anything when it is off
+        if (!config.showAutofillButton) {
+            return
+        }
+        if (!isAutofillServiceEnabled()) {
+            toast(R.string.autofill_no_service)
+            return
+        }
+
+        // asks the served editor to trigger its autofill UI: the active service then shows
+        // its own dropdown, or inline suggestions rendered in this keyboard's top bar
+        currentInputConnection?.performContextMenuAction(android.R.id.autofill)
+    }
 
     private fun triggerSpellCheck() {
         if (isPasswordField()) {
